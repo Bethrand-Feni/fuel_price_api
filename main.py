@@ -5,6 +5,7 @@ import logging
 
 
 #Constants
+#Set as contant variables when pushed as google cloud funtions so dont need .env file anymore
 SYNC_SECRET_KEY = os.environ.get("SYNC_SECRET_KEY")
 GOOGLE_BUCKET_NAME = os.environ.get("GOOGLE_BUCKET_NAME")
 
