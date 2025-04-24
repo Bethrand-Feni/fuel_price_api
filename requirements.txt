@@ -1,3 +1,0 @@
-fastapi
-mangum
-google-cloud-storage
