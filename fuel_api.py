@@ -1,13 +1,16 @@
 import os
+
+from dotenv import load_dotenv
 from google.cloud import storage
 import json
 import logging
 
 
 #Constants
-#Set as contant variables when pushed as google cloud funtions so dont need .env file anymore
+#Set as constant variables when pushed as google cloud funtions so dont need .env file anymore
 SYNC_SECRET_KEY = os.environ.get("SYNC_SECRET_KEY")
 GOOGLE_BUCKET_NAME = os.environ.get("GOOGLE_BUCKET_NAME")
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 data = {}
