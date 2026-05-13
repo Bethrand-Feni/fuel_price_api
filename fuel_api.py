@@ -1,70 +1,57 @@
 import os
-
-from dotenv import load_dotenv
-from google.cloud import storage
-import json
 import logging
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from fuel_methods import get_latest_fuel_price, get_all_latest_fuel_prices, get_latest_news
+from auth import verify_token
 
-
-#Constants
-#Set as constant variables when pushed as google cloud funtions so dont need .env file anymore
-SYNC_SECRET_KEY = os.environ.get("SYNC_SECRET_KEY")
-GOOGLE_BUCKET_NAME = os.environ.get("GOOGLE_BUCKET_NAME")
 load_dotenv()
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-data = {}
 
+app = FastAPI()
 
-def fetch_data():
-    global data
+class Fuel(BaseModel):
+    id: int
+    fuel_type: str
+    location: str
+    price: float
+    price_date: str
 
-    logging.info("Server starting")
+@app.get("/")
+def read_root():
+    return {"Message": "Welcome to Openfuel API"}
 
-    bucket_name = "feul-prices"
-    project_id = "even-hull-456007-m4"
-    storage_client = storage.Client(project=project_id)
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob("scraped-data.json")
-    downloaded_data = blob.download_as_string()
-
-    return json.loads(downloaded_data)
-
-
-def set_up():
-    global data
-    try:
-        logging.info("Server starting")
-        data = fetch_data()
-        logging.info("Server started and data fetched")
+@app.get("/fuel/all", response_model=list[Fuel], dependencies=[Depends(verify_token)])
+def read_fuel_all():
+    data = get_all_latest_fuel_prices()
+    if data:
         return data
-    except Exception as e:
-        logging.error(f"Error: {e}")
+    raise HTTPException(status_code=404, detail="No fuel prices found")
 
+@app.get("/fuel/{fuel_type}/{location}", response_model=Fuel, dependencies=[Depends(verify_token)])
+def read_fuel(fuel_type: str, location: str):
+    data = get_latest_fuel_price(fuel_type, location)
+    if data:
+        return data
+    raise HTTPException(status_code=404, detail=f"Fuel type {fuel_type} in {location} not found")
 
+@app.get("/news", dependencies=[Depends(verify_token)])
+def read_all_news():
+    """Returns both petrol and diesel news summaries for the latest month."""
+    data = get_latest_news()
+    if data:
+        return data
+    raise HTTPException(status_code=404, detail="No news summaries found")
 
-
-
-def create_handler(request):
-    global data
-    path = request.path
-    method = request.method
-
-    if path == "/" and method == "GET":
-        return json.dumps({"Message": "Welcome to Fuel Prices API"}), 200, {"Content-Type": "application/json"}
-
-
-    if path.startswith("/fuel") and method == "GET":
-        fuel_type = path.split("/fuel/")[1]
-        fuel_price = data.get(fuel_type)
-        if fuel_price is not None:
-            return json.dumps({fuel_type:fuel_price}),200,{"Content-Type": "application/json"}
-        else:
-            return json.dumps({"error":f"Fuel type {fuel_type} not found"}, 400)
-
-
-
-set_up()
-
-
-
+@app.get("/news/{fuel_type}", dependencies=[Depends(verify_token)])
+def read_fuel_news(fuel_type: str):
+    """Returns the latest news summary for a specific fuel type (petrol or diesel)."""
+    data = get_latest_news(fuel_type)
+    if data:
+        return data
+    raise HTTPException(status_code=404, detail=f"News summary for {fuel_type} not found")
