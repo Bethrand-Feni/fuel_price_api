@@ -2,3 +2,8 @@
 data.json
 Dockerfile
 venv
+latest_fuel_data.json
+__pycache__/
+.pytest_cache/
+.agents/
+skills-lock.json

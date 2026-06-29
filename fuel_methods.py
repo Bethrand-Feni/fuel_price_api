@@ -1,143 +1,193 @@
-import os
+import json
 import logging
-from dotenv import load_dotenv
-from supabase import create_client, Client
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Any
 
-# Load environment variables
+from dotenv import load_dotenv
+from supabase import Client, create_client
+
 load_dotenv()
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
-SUPABASE_URL: str = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY")
+SUPABASE_URL: str | None = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY: str | None = os.environ.get("SUPABASE_KEY")
+CACHE_PATH = Path(__file__).with_name("latest_fuel_data.json")
+CACHE_TTL_SECONDS = int(os.environ.get("FUEL_CACHE_TTL_SECONDS", "86400"))
 
-# Initialize the Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+FUEL_TYPES = ("unleaded93", "unleaded95", "diesel500", "diesel50", "lrp93")
+LOCATIONS = ("inland", "coast")
+PRICE_COLUMNS = tuple(f"{fuel_type}_{location}" for fuel_type in FUEL_TYPES for location in LOCATIONS)
+REQUIRED_ROW_FIELDS = ("summary_month", "petrol_news", "diesel_news", *PRICE_COLUMNS)
+
+supabase: Client | None = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+
+class FuelDataUnavailableError(RuntimeError):
+    """Raised when neither Supabase nor the local cache can provide fuel data."""
+
+
+def _is_valid_fuel_row(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+
+    missing_fields = [field for field in REQUIRED_ROW_FIELDS if field not in row]
+    if missing_fields:
+        logger.warning("Fuel cache row is missing required fields: %s", ", ".join(missing_fields))
+        return False
+
+    return bool(row.get("summary_month"))
+
+
+def _read_cache() -> dict[str, Any] | None:
+    if not CACHE_PATH.exists():
+        return None
+
+    try:
+        with CACHE_PATH.open("r", encoding="utf-8") as cache_file:
+            row = json.load(cache_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not read fuel cache %s: %s", CACHE_PATH, exc)
+        return None
+
+    return row if _is_valid_fuel_row(row) else None
+
+
+def _is_cache_fresh(row: dict[str, Any]) -> bool:
+    cached_at = row.get("cached_at")
+    if not cached_at:
+        return False
+
+    try:
+        cached_at_datetime = datetime.fromisoformat(cached_at)
+    except ValueError:
+        return False
+
+    if cached_at_datetime.tzinfo is None:
+        cached_at_datetime = cached_at_datetime.replace(tzinfo=timezone.utc)
+
+    cache_age = datetime.now(timezone.utc) - cached_at_datetime
+    return cache_age.total_seconds() < CACHE_TTL_SECONDS
+
+
+def _write_cache(row: dict[str, Any]) -> None:
+    cache_payload = {
+        **row,
+        "cached_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    with NamedTemporaryFile("w", encoding="utf-8", dir=CACHE_PATH.parent, delete=False) as temp_file:
+        json.dump(cache_payload, temp_file, indent=2, sort_keys=True)
+        temp_file.write("\n")
+        temp_path = Path(temp_file.name)
+
+    temp_path.replace(CACHE_PATH)
+    logger.info("Fuel cache refreshed at %s", CACHE_PATH)
+
+
+def _fetch_latest_fuel_row_from_supabase() -> dict[str, Any] | None:
+    if not supabase:
+        raise FuelDataUnavailableError("Supabase client is not configured")
+
+    response = (
+        supabase.table("fuel_prices")
+        .select("*")
+        .order("summary_month", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    row = response.data[0]
+    return row if _is_valid_fuel_row(row) else None
+
+
+def get_latest_fuel_row() -> dict[str, Any]:
+    cached_row = _read_cache()
+    if cached_row and _is_cache_fresh(cached_row):
+        return cached_row
+
+    try:
+        supabase_row = _fetch_latest_fuel_row_from_supabase()
+    except Exception as exc:
+        if cached_row:
+            logger.warning("Serving stale fuel cache because Supabase fetch failed: %s", exc)
+            return cached_row
+        raise FuelDataUnavailableError("Fuel data is unavailable") from exc
+
+    if not supabase_row:
+        raise FuelDataUnavailableError("No fuel data found in Supabase")
+
+    _write_cache(supabase_row)
+    return supabase_row
+
 
 def get_latest_fuel_price(fuel_type: str, location: str):
-    """
-    Fetch the latest monthly row and extract the specific price for 
-    the given fuel_type and location from the wide-row schema.
-    """
-    logger.info(f"Fetching latest fuel price for type: {fuel_type}, location: {location}")
-    if not supabase:
-        logger.error("Supabase client not initialized")
+    normalized_fuel_type = fuel_type.lower()
+    normalized_location = location.lower()
+
+    if normalized_fuel_type not in FUEL_TYPES or normalized_location not in LOCATIONS:
         return None
-        
-    response = supabase.table("fuel_prices").select("*") \
-        .order("summary_month", desc=True) \
-        .limit(1) \
-        .execute()
-    
-    if not response.data:
-        logger.warning("No data found in fuel_prices table")
+
+    row = get_latest_fuel_row()
+    column_name = f"{normalized_fuel_type}_{normalized_location}"
+
+    if row.get(column_name) is None:
         return None
-        
-    row = response.data[0]
-    logger.info(f"Retrieved row for month: {row.get('summary_month')}")
-    
-    # Construct column name, e.g., "unleaded93_inland"
-    column_name = f"{fuel_type.lower()}_{location.lower()}".replace(" ", "_")
-    
-    if column_name in row:
-        data = {
-            "id": row["id"],
-            "fuel_type": fuel_type,
-            "location": location,
-            "price": row[column_name],
-            "price_date": row["summary_month"]
-        }
-        logger.info(f"Found price for {column_name}: {row[column_name]}")
-        return data
-        
-    logger.warning(f"Column {column_name} not found in retrieved data")
-    return None
+
+    return {
+        "id": row.get("id", 0),
+        "fuel_type": normalized_fuel_type,
+        "location": normalized_location,
+        "price": row[column_name],
+        "price_date": row["summary_month"],
+    }
+
 
 def get_all_latest_fuel_prices():
-    """
-    Fetch the latest monthly row and convert it into a list of 
-    individual fuel price objects.
-    """
-    logger.info("Fetching all latest fuel prices")
-    if not supabase:
-        logger.error("Supabase client not initialized")
-        return []
-        
-    response = supabase.table("fuel_prices").select("*") \
-        .order("summary_month", desc=True) \
-        .limit(1) \
-        .execute()
-    
-    if not response.data:
-        logger.warning("No data found in fuel_prices table")
-        return []
-        
-    row = response.data[0]
-    logger.info(f"Retrieved row for month: {row.get('summary_month')}")
+    row = get_latest_fuel_row()
     results = []
-    
-    # Define all price columns present in the wide row schema
-    price_columns = [
-        "unleaded93_inland", "unleaded93_coast",
-        "unleaded95_inland", "unleaded95_coast",
-        "diesel500_inland", "diesel500_coast",
-        "diesel50_inland", "diesel50_coast",
-        "lrp93_inland", "lrp93_coast"
-    ]
-    
-    for col in price_columns:
-        if col in row and row[col] is not None:
-            parts = col.split("_")
-            results.append({
-                "id": row["id"],
-                "fuel_type": parts[0],
-                "location": parts[1],
-                "price": row[col],
-                "price_date": row["summary_month"]
-            })
-            
-    logger.info(f"Returning {len(results)} fuel price records")
+
+    for column in PRICE_COLUMNS:
+        if row.get(column) is None:
+            continue
+
+        fuel_type, location = column.split("_")
+        results.append(
+            {
+                "id": row.get("id", 0),
+                "fuel_type": fuel_type,
+                "location": location,
+                "price": row[column],
+                "price_date": row["summary_month"],
+            }
+        )
+
     return results
 
-def get_latest_news(fuel_type: str = None):
-    """
-    Fetch the latest news summaries. If fuel_type is provided, 
-    returns only that summary. Otherwise returns both.
-    """
-    logger.info(f"Fetching latest news (fuel_type filter: {fuel_type})")
-    if not supabase:
-        logger.error("Supabase client not initialized")
-        return None
-        
-    response = supabase.table("fuel_prices").select("summary_month, petrol_news, diesel_news") \
-        .order("summary_month", desc=True) \
-        .limit(1) \
-        .execute()
-    
-    logger.info(f"Supabase response data: {response.data}")
-    
-    if not response.data:
-        logger.warning("No news data found in fuel_prices table")
-        return None
-        
-    row = response.data[0]
-    
+
+def get_latest_news(fuel_type: str | None = None):
+    row = get_latest_fuel_row()
+
     if fuel_type:
-        key = f"{fuel_type.lower()}_news"
-        if key in row:
-            logger.info(f"Returning news for {fuel_type}")
-            return {
-                "month": row["summary_month"],
-                "fuel_type": fuel_type,
-                "summary": row[key]
-            }
-        logger.warning(f"Key {key} not found in news row")
-        return None
-        
-    logger.info("Returning news for both fuel types")
+        normalized_fuel_type = fuel_type.lower()
+        key = f"{normalized_fuel_type}_news"
+        if key not in ("petrol_news", "diesel_news"):
+            return None
+
+        return {
+            "month": row["summary_month"],
+            "fuel_type": normalized_fuel_type,
+            "summary": row[key],
+        }
+
     return {
         "month": row["summary_month"],
         "petrol": row["petrol_news"],
-        "diesel": row["diesel_news"]
+        "diesel": row["diesel_news"],
     }
