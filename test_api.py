@@ -56,6 +56,19 @@ def test_read_root():
     assert response.json() == {"Message": "Welcome to Openfuel API"}
 
 
+def test_cors_preflight_allows_any_origin():
+    response = client.options(
+        "/fuel/all",
+        headers={
+            "Origin": "https://example-frontend.netlify.app",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
 def test_read_fuel_without_token_from_cache(tmp_path, monkeypatch):
     cache_path = tmp_path / "latest_fuel_data.json"
     write_cache(cache_path)
