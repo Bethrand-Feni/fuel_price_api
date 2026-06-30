@@ -21,6 +21,16 @@ CACHE_TTL_SECONDS = int(os.environ.get("FUEL_CACHE_TTL_SECONDS", "86400"))
 FUEL_TYPES = ("unleaded93", "unleaded95", "diesel500", "diesel50", "lrp93")
 LOCATIONS = ("inland", "coast")
 PRICE_COLUMNS = tuple(f"{fuel_type}_{location}" for fuel_type in FUEL_TYPES for location in LOCATIONS)
+PETROL_PRICE_COLUMNS = tuple(
+    f"{fuel_type}_{location}"
+    for fuel_type in ("unleaded93", "unleaded95", "lrp93")
+    for location in LOCATIONS
+)
+DIESEL_PRICE_COLUMNS = tuple(
+    f"{fuel_type}_{location}"
+    for fuel_type in ("diesel500", "diesel50")
+    for location in LOCATIONS
+)
 REQUIRED_ROW_FIELDS = ("summary_month", "petrol_news", "diesel_news", *PRICE_COLUMNS)
 
 supabase: Client | None = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
@@ -107,6 +117,21 @@ def _fetch_latest_fuel_row_from_supabase() -> dict[str, Any] | None:
     return row if _is_valid_fuel_row(row) else None
 
 
+def _fetch_fuel_history_from_supabase(limit: int = 12) -> list[dict[str, Any]]:
+    if not supabase:
+        raise FuelDataUnavailableError("Supabase client is not configured")
+
+    response = (
+        supabase.table("fuel_prices")
+        .select("*")
+        .order("summary_month", desc=True)
+        .limit(limit)
+        .execute()
+    )
+
+    return response.data or []
+
+
 def get_latest_fuel_row() -> dict[str, Any]:
     cached_row = _read_cache()
     if cached_row and _is_cache_fresh(cached_row):
@@ -191,3 +216,38 @@ def get_latest_news(fuel_type: str | None = None):
         "petrol": row["petrol_news"],
         "diesel": row["diesel_news"],
     }
+
+
+def get_fuel_history(months: int = 12):
+    try:
+        rows = _fetch_fuel_history_from_supabase(months)
+    except Exception as exc:
+        raise FuelDataUnavailableError("Fuel history is unavailable") from exc
+
+    valid_rows = [row for row in rows if _is_valid_fuel_row(row)]
+    if not valid_rows:
+        return []
+
+    history = []
+    for row in reversed(valid_rows):
+        history.append(
+            {
+                "month": row["summary_month"],
+                "petrol": {
+                    column: row[column]
+                    for column in PETROL_PRICE_COLUMNS
+                    if row.get(column) is not None
+                },
+                "diesel": {
+                    column: row[column]
+                    for column in DIESEL_PRICE_COLUMNS
+                    if row.get(column) is not None
+                },
+                "news": {
+                    "petrol": row["petrol_news"],
+                    "diesel": row["diesel_news"],
+                },
+            }
+        )
+
+    return history

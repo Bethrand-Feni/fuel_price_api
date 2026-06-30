@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from fuel_methods import (
     FuelDataUnavailableError,
     get_all_latest_fuel_prices,
+    get_fuel_history,
     get_latest_fuel_price,
     get_latest_news,
 )
@@ -54,6 +55,17 @@ class FuelNews(BaseModel):
     summary: str
 
 
+class FuelHistoryMonth(BaseModel):
+    month: str
+    petrol: dict[str, float]
+    diesel: dict[str, float]
+    news: dict[str, str]
+
+
+class FuelHistory(BaseModel):
+    months: list[FuelHistoryMonth]
+
+
 @app.get("/")
 def read_root():
     return {"Message": "Welcome to Openfuel API"}
@@ -81,6 +93,18 @@ def read_fuel(fuel_type: FuelType, location: Location):
     if data:
         return data
     raise HTTPException(status_code=404, detail=f"Fuel type {fuel_type.value} in {location.value} not found")
+
+
+@app.get("/fuel/history", response_model=FuelHistory)
+def read_fuel_history():
+    try:
+        data = get_fuel_history()
+    except FuelDataUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if data:
+        return {"months": data}
+    raise HTTPException(status_code=404, detail="No fuel history found")
 
 
 @app.get("/news", response_model=AllNews)

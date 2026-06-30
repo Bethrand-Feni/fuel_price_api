@@ -32,6 +32,20 @@ def sample_row():
     }
 
 
+def sample_history_rows():
+    rows = []
+    for month in range(1, 13):
+        row = sample_row()
+        row["id"] = month
+        row["summary_month"] = f"2026-{month:02d}-01"
+        row["petrol_news"] = f"Petrol news {month}"
+        row["diesel_news"] = f"Diesel news {month}"
+        row["unleaded93_inland"] = 20.0 + month
+        row["diesel50_coast"] = 18.0 + month
+        rows.append(row)
+    return list(reversed(rows))
+
+
 def write_cache(path, row=None):
     path.write_text(fuel_methods.json.dumps(row or sample_row()), encoding="utf-8")
 
@@ -159,6 +173,35 @@ def test_invalid_fuel_or_location_returns_422():
 
     assert fuel_response.status_code == 422
     assert location_response.status_code == 422
+
+
+def test_read_fuel_history_returns_last_12_months(monkeypatch):
+    monkeypatch.setattr(fuel_methods, "_fetch_fuel_history_from_supabase", lambda limit=12: sample_history_rows())
+
+    response = client.get("/fuel/history")
+
+    assert response.status_code == 200
+    months = response.json()["months"]
+    assert len(months) == 12
+    assert months[0]["month"] == "2026-01-01"
+    assert months[-1]["month"] == "2026-12-01"
+    assert "unleaded93_inland" in months[-1]["petrol"]
+    assert "diesel50_coast" in months[-1]["diesel"]
+    assert months[-1]["news"] == {
+        "petrol": "Petrol news 12",
+        "diesel": "Diesel news 12",
+    }
+
+
+def test_read_fuel_history_supabase_failure_returns_503(monkeypatch):
+    def fail_fetch(limit=12):
+        raise RuntimeError("Supabase unavailable")
+
+    monkeypatch.setattr(fuel_methods, "_fetch_fuel_history_from_supabase", fail_fetch)
+
+    response = client.get("/fuel/history")
+
+    assert response.status_code == 503
 
 
 def test_read_news_all_from_cache(tmp_path, monkeypatch):
