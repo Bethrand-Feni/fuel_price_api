@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "open-fuel-api",
+  "main": "src/worker.py",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["python_workers"],
+  "workers_dev": true,
+  "env": {
+    "staging": {
+      "name": "open-fuel-api-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "open-fuel-data-staging",
+          "database_id": "5062d5ba-08f3-4196-835e-8ff3a655b90e",
+          "migrations_dir": "migrations"
+        }
+      ]
+    },
+    "production": {
+      "name": "open-fuel-api",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "open-fuel-data",
+          "database_id": "de44f7c3-bc95-4a79-b137-c924205364f9",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
+}
