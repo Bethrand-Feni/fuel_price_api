@@ -32,8 +32,7 @@ Locations: `inland`, `coast`
 {
   "fuel_type": "unleaded95",
   "location": "inland",
-  "price": 24.85,
-  "price_date": "2026-08-01"
+  "price": 24.85
 }
 ```
 

@@ -104,6 +104,7 @@ def test_read_all_returns_all_ten_prices_in_contract_order(client, repository_ov
     assert response.status_code == 200
     payload = response.json()
     assert len(payload) == 10
+    assert set(payload[0]) == {"fuel_type", "location", "price"}
     assert [(item["fuel_type"], item["location"]) for item in payload] == [
         (fuel_type, location) for fuel_type in FUEL_TYPES for location in LOCATIONS
     ]
@@ -114,11 +115,9 @@ def test_read_single_price_preserves_response_model(client, repository_override)
 
     assert response.status_code == 200
     assert response.json() == {
-        "id": 1,
         "fuel_type": "unleaded93",
         "location": "inland",
         "price": 20.0,
-        "price_date": "2026-05-01",
     }
 
 

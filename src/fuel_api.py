@@ -48,11 +48,9 @@ class NewsFuelType(str, Enum):
 
 
 class Fuel(BaseModel):
-    id: int
     fuel_type: str
     location: str
     price: float
-    price_date: str
 
 
 class AllNews(BaseModel):

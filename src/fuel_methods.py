@@ -225,11 +225,9 @@ async def get_latest_fuel_price(
 
     column_name = f"{normalized_fuel_type}_{normalized_location}"
     return {
-        "id": row["id"],
         "fuel_type": normalized_fuel_type,
         "location": normalized_location,
         "price": row[column_name],
-        "price_date": row["summary_month"],
     }
 
 
@@ -240,11 +238,9 @@ async def get_all_latest_fuel_prices(repository: FuelRepository) -> list[dict[st
 
     return [
         {
-            "id": row["id"],
             "fuel_type": fuel_type,
             "location": location,
             "price": row[f"{fuel_type}_{location}"],
-            "price_date": row["summary_month"],
         }
         for fuel_type in FUEL_TYPES
         for location in LOCATIONS
